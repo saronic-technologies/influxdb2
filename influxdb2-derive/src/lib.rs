@@ -11,44 +11,50 @@ use expand_writable::impl_writeable;
 use itertools::izip;
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Data, DeriveInput, Ident};
+use syn::{parse_macro_input, Data, DeriveInput, Ident, Meta, NestedMeta};
 
 /// Implements the functionality for converting entries in a BTreeMap into
 /// attributes and values of a struct. It will consume a tokenized version of
 /// the initial struct declaration, and use code generation to implement the
-/// `FromMap` trait for instantiating the contents of the struct.
-#[proc_macro_derive(FromDataPoint)]
+/// `FromMap` trait for instantiating the contents of the struct.use syn::{parse_macro_input, DeriveInput, Data, Ident, Meta, NestedMeta};
+
+#[proc_macro_derive(FromDataPoint, attributes(rename))]
 pub fn from_data_point(input: TokenStream) -> TokenStream {
-    let ast = syn::parse_macro_input!(input as DeriveInput);
+    let ast = parse_macro_input!(input as DeriveInput);
 
     // parse out all the field names in the struct as `Ident`s
     let fields = match ast.data {
         Data::Struct(st) => st.fields,
         _ => panic!("Implementation must be a struct"),
     };
-    let idents: Vec<&Ident> = fields
-        .iter()
-        .filter_map(|field| field.ident.as_ref())
-        .collect::<Vec<&Ident>>();
 
-    // This is struct fields. For example:
-    //
-    // ```
-    // struct StockQuote {
-    //     ticker: String,
-    //     close: f64,
-    //     time: i64,
-    // }
-    // ```
-    //
-    // keys will be ["ticker", "close", "time"]
-    //
-    // convert all the field names into strings
-    let keys: Vec<String> = idents
-        .clone()
-        .iter()
-        .map(|ident| ident.to_string())
-        .collect::<Vec<String>>();
+    // extract field names and custom renames
+    let mut idents = Vec::new();
+    let mut keys = Vec::new();
+
+    for field in fields.iter() {
+        if let Some(ident) = &field.ident {
+            idents.push(ident);
+
+            let mut custom_name = ident.to_string();
+            for attr in &field.attrs {
+                if attr.path.is_ident("rename") {
+                    if let Ok(Meta::List(meta_list)) = attr.parse_meta() {
+                        for meta in meta_list.nested.iter() {
+                            if let NestedMeta::Meta(Meta::NameValue(nv)) = meta {
+                                if nv.path.is_ident("name") {
+                                    if let syn::Lit::Str(lit_str) = &nv.lit {
+                                        custom_name = lit_str.value();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            keys.push(custom_name);
+        }
+    }
 
     // Typenames: i.e. "String", "f64", "i64"
     let typenames = fields
@@ -68,7 +74,7 @@ pub fn from_data_point(input: TokenStream) -> TokenStream {
     let duration_re = regex::Regex::new(r"Duration").unwrap();
     let base64_re = regex::Regex::new(r"Vec").unwrap();
     let mut assignments = Vec::new();
-    for (key, typename, ident) in izip!(keys, typenames, idents) {
+    for ((key, typename), ident) in keys.iter().zip(typenames.iter()).zip(idents.iter()) {
         match &typename[..] {
             "f64" => {
                 assignments.push(quote! {
@@ -191,7 +197,7 @@ pub fn from_data_point(input: TokenStream) -> TokenStream {
                     match hashmap.entry(key.clone()) {
                         ::std::collections::btree_map::Entry::Occupied(entry) => {
                             if let influxdb2_structmap::value::Value::Base64Binary(v) = entry.get() {
-                                settings.#ident = *v;
+                                settings.#ident = v.clone();
                             }
                         },
                         _ => panic!("Cannot parse out map entry, key: {}", key),
