@@ -9,6 +9,13 @@ repository = "https://github.com/aprimadi/influxdb2"
 license = "MIT"
 edition = "2018"
 
+
+[workspace]
+members = [
+    "influxdb2-structmap",
+    "influxdb2-derive"
+]
+
 [features]
 default = ["native-tls"]
 native-tls = ["reqwest/native-tls"]
